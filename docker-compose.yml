@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  edih-analytics:
+    build: .
+    container_name: edih-analytics
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    volumes:
+      # Mount data directory (read-only for security)
+      - ${APP_FOLDER_LINUX}:/app/data:ro
+      # Mount logs directory
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - edih-network
+
+networks:
+  edih-network:
+    driver: bridge
