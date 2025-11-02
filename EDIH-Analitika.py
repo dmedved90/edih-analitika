@@ -1,5 +1,5 @@
 # EDIH ADRIA analitika v.5 31.10.2025. 19:00
-# Updated for Streamlit 1.50.0 and latest libraries
+# Updated for Streamlit 1.50.0 and latest libraries, added password protection
 
 import warnings
 import streamlit as st
@@ -17,6 +17,29 @@ import fitz  # PyMuPDF
 import base64, io, json, os, time, random, glob
 from io import BytesIO
 import plotly.io as pio
+import hmac
+
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    def password_entered():
+        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if st.session_state.get("password_correct", False):
+        return True
+
+    st.text_input("🔐 Password", type="password", on_change=password_entered, key="password")
+    
+    if "password_correct" in st.session_state:
+        st.error("😕 Incorrect password")
+    
+    return False
+
+if not check_password():
+    st.stop()
 
 # 🌈 GLOBALNA PLOTLY TEMA (EDIH vizualni identitet)
 pio.templates["edih_theme"] = pio.templates["plotly_white"]
@@ -76,9 +99,13 @@ warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
 # Folder where CSV or XML data will be saved
 
 app_folder = str(Path.home() / "EDIH")
+app_folder_path = Path(app_folder)  # Konverzija stringa u Path objekt
 data_folder = os.path.join(app_folder, "Data")
 dma_folder = os.path.join(app_folder, "DMA")
 slike_folder = os.path.join(app_folder, "Slike")
+
+
+
 
 CATEGORIES = {"SME": os.path.join(dma_folder, "SME"),
               "PSO": os.path.join(dma_folder, "PSO")}
@@ -305,6 +332,32 @@ def safe_df(df):
     for col in df.select_dtypes(include=["object"]).columns:
         df[col] = df[col].astype(str)
     return df
+
+def find_best_folder_match(org_name, base_folder):
+    """Pronađi najbolje poklapanje foldera za organizaciju."""
+    org_clean = org_name.strip().rstrip('.').lower()
+    
+    # Prvo traži exact match (bez TBI_ prefiksa)
+    for f in base_folder.iterdir():
+        if not f.is_dir():
+            continue
+        
+        folder_clean = f.name.replace("TBI_", "").strip().rstrip('.').lower()
+        
+        if folder_clean == org_clean:
+            return f
+    
+    # Ako nema exact match, traži partial match
+    for f in base_folder.iterdir():
+        if not f.is_dir():
+            continue
+        
+        folder_lower = f.name.lower()
+        
+        if org_clean in folder_lower:
+            return f
+    
+    return None
 
 # --- Helper funkcija za pronalazak najnovije datoteke po prefiksu ---
 def get_latest_file(folder, prefix, extension="xlsx"):
@@ -913,27 +966,15 @@ with col1:
             # st.dataframe(bootcamp_summary, width=True)
             st.table(bootcamp_summary)
 
+    #--------------------------------------------------------------------------------------------------
     elif analysis_type == "TBI - Summary":
         st.subheader("Test Before Invest Analysis")
         with st.expander("Explanation of Results"):
             st.write("Due to delays in aligning procedures with national rules, particularly with the Ministry of Economy, which co-finances 50% of the project activities, the preparation of the MS3 - EDIH Adria internal procedure for TBI support operations took longer than anticipated. These procedures were essential to ensure alignment with state aid rules and national implementation protocols. As a result, the final version of the EDIH Adria internal procedure for TBI support operations was officially delivered on November 16th, 2023.All project partners were actively involved in the implementation of TBIs, either by providing expert support or participating in the user acquisition and selection process.During this reporting period, EDIH Adria provided TBI support for new digital products and services to one beneficiary (30 TBI days), and TBI support for digital transformation to six beneficiaries (140 TBI days). As of the end of September 2024, a total of 895 TBI days had been contracted with 38 unique users (5 SMEs and 33 PIs).")
         # Filter for Test Before Invest category
         tbi_data = data[data['Service category delivered'] == "Test before invest"].copy()
-        st.write(tbi_data)
+        # st.write(tbi_data)
 
-        # Calculate mandays (Service Price / 1000)
-        #tbi_data["Mandays"] = tbi_data["Service price, €"] / 1000
-
-        # Aggregate by Customer and Status
-        #tbi_summary = tbi_data.groupby(["Customer", "Status"]).agg(
-        #    total_price=("Service price, €", "sum"),
-        #    total_mandays=("Mandays", "sum")
-        #).reset_index()
-
-        # Display summary table
-        # st.write("Test Before Invest Summary Table")
-        # st.dataframe(tbi_summary, width=True)
-        
         # 1. Make sure your date column is datetime
         data['Start Date'] = pd.to_datetime(data['Start Date'], dayfirst=True)
 
@@ -959,13 +1000,174 @@ with col1:
             )
         )
 
+        # ═══════════════════════════════════════════════════════════════════════════
+        # NOVA ANALIZA 1: TBI TIMELINE
+        # ═══════════════════════════════════════════════════════════════════════════
+        
+        st.subheader("📈 TBI Timeline Analysis")
+        
+        # Extract year from Start Date
+        tbi_data['Start Year'] = tbi_data['Start Date'].dt.year
+        
+        tbi_timeline = tbi_data.groupby('Start Year').agg(
+            total_services=('Customer', 'count'),
+            total_mandays=('Mandays', 'sum'),
+            unique_customers=('Customer', 'nunique')
+        ).reset_index()
+        
+        # Ensure Year is string for proper display
+        tbi_timeline['Start Year'] = tbi_timeline['Start Year'].astype(int).astype(str)
+        
+        # Create dual-axis chart
+        fig_timeline = go.Figure()
+        
+        # Add mandays line
+        fig_timeline.add_trace(go.Scatter(
+            x=tbi_timeline['Start Year'],
+            y=tbi_timeline['total_mandays'],
+            name='Total Mandays',
+            mode='lines+markers',
+            line=dict(color='#2E7D32', width=3),
+            marker=dict(size=10)
+        ))
+        
+        # Add services bar
+        fig_timeline.add_trace(go.Bar(
+            x=tbi_timeline['Start Year'],
+            y=tbi_timeline['total_services'],
+            name='Number of Services',
+            yaxis='y2',
+            marker_color='#FFA726',
+            opacity=0.6
+        ))
+        
+        fig_timeline.update_layout(
+            title='TBI Trend Over Time',
+            xaxis=dict(title='Year', type='category'),
+            yaxis=dict(title='Total Mandays', side='left'),
+            yaxis2=dict(title='Number of Services', side='right', overlaying='y'),
+            hovermode='x unified',
+            height=500
+        )
+        
+        st.plotly_chart(fig_timeline, config={'displayModeBar': True, 'displaylogo': False})
+        
+        with st.expander("📋 Timeline data"):
+            st.table(tbi_timeline)
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # NOVA ANALIZA 2: TOP 10 ORGANIZATIONS
+        # ═══════════════════════════════════════════════════════════════════════════
+        
+        st.subheader("🏆 Top 10 Organizations by TBI Mandays")
+        
+        top_tbi_orgs = tbi_summary.nlargest(10, 'total_mandays').sort_values('total_mandays', ascending=True)
+        
+        fig_top_orgs = px.bar(
+            top_tbi_orgs,
+            x='total_mandays',
+            y='Customer',
+            orientation='h',
+            color='total_mandays',
+            color_continuous_scale=EDIH_CONTINUOUS_SCALE,
+            title='Top 10 Organizations by TBI Mandays',
+            labels={'total_mandays': 'Total Mandays', 'Customer': 'Organization'},
+            text='total_mandays',
+            height=500
+        )
+        fig_top_orgs.update_traces(texttemplate='%{text:.1f}', textposition='outside')
+        fig_top_orgs.update_layout(showlegend=False)
+        
+        st.plotly_chart(fig_top_orgs, config={'displayModeBar': True, 'displaylogo': False})
+        
+        with st.expander("📋 Top 10 data"):
+            st.table(top_tbi_orgs[['Customer', 'total_mandays', 'total_price']])
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # NOVA ANALIZA 3: TBI → DAP/FCO CONVERSION
+        # ═══════════════════════════════════════════════════════════════════════════
+        
+        st.subheader("🔄 TBI to DAP/FCO Conversion Analysis")
+        
+        # Filter DAP/FCO data
+        dap_data = data[data['Service category delivered'] == "Support to find investment"].copy()
+        
+        # Get unique customers
+        tbi_customers = set(tbi_data['Customer'].dropna().unique())
+        dap_customers = set(dap_data['Customer'].dropna().unique())
+        conversion_customers = tbi_customers.intersection(dap_customers)
+        
+        # Conversion metrics
+        col_conv1, col_conv2, col_conv3 = st.columns(3)
+        
+        with col_conv1:
+            st.metric(
+                "Total TBI Customers",
+                value=len(tbi_customers),
+                help="Organizations that received TBI services"
+            )
+        
+        with col_conv2:
+            st.metric(
+                "Converted to DAP/FCO",
+                value=len(conversion_customers),
+                delta=f"{len(conversion_customers)/len(tbi_customers)*100:.1f}%" if len(tbi_customers) > 0 else "0%",
+                help="Organizations that proceeded from TBI to DAP/FCO"
+            )
+        
+        with col_conv3:
+            st.metric(
+                "Conversion Rate",
+                value=f"{len(conversion_customers)/len(tbi_customers)*100:.1f}%" if len(tbi_customers) > 0 else "0%",
+                help="Percentage of TBI customers that moved to DAP/FCO"
+            )
+        
+        # Conversion funnel visualization
+        funnel_data = pd.DataFrame({
+            'Stage': ['TBI Started', 'TBI Completed', 'Moved to DAP/FCO'],
+            'Count': [
+                len(tbi_customers),
+                len(tbi_summary[tbi_summary['Status'] == 'Completed']['Customer'].unique()),
+                len(conversion_customers)
+            ]
+        })
+        
+        fig_funnel = go.Figure(go.Funnel(
+            y=funnel_data['Stage'],
+            x=funnel_data['Count'],
+            textinfo="value+percent initial",
+            marker=dict(color=["#4CAF50", "#FFA726", "#2196F3"])
+        ))
+        
+        fig_funnel.update_layout(
+            title='TBI to DAP/FCO Conversion Funnel',
+            height=400
+        )
+        
+        st.plotly_chart(fig_funnel, config={'displayModeBar': True, 'displaylogo': False})
+        
+        # List of converted organizations
+        if conversion_customers:
+            with st.expander("📋 Organizations that converted from TBI to DAP/FCO"):
+                converted_list = pd.DataFrame({
+                    'Organization': sorted(list(conversion_customers))
+                })
+                st.table(converted_list)
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # POSTOJEĆE ANALIZE 
+        # ═══════════════════════════════════════════════════════════════════════════
+
         # Optional: reset index (groupby with as_index=False already did that)
         # tbi_summary = tbi_summary.reset_index(drop=True)
+
         # Pie Chart for Work Done by Status
         fig_pie = px.pie(
                 tbi_summary,
                 names="Status",
                 values="total_price",
+                color="Status",
+                color_discrete_sequence=px.colors.qualitative.Vivid,  # Koristi diskretnu paletu
                 title="Work Completion Percentage by Status",
                 labels={"total_price": "Total Service Value (€)"},
                 hole=0.4
@@ -973,23 +1175,57 @@ with col1:
         st.plotly_chart(fig_pie, config={'displayModeBar': True, 'displaylogo': False})
 
 
-        # Bar Chart for Service Price by Customer and Status
+        # ═══════════════════════════════════════════════════════════════════════════
+        # GRAF 1: Service Price by Customer and Status (HORIZONTALNI)
+        # ═══════════════════════════════════════════════════════════════════════════
+
+        st.subheader("💰 TBI Service Value by Customer")
+
+        # Sortiraj po total_price za bolji prikaz
+        tbi_summary_sorted = tbi_summary.sort_values('total_price', ascending=True)
+
         fig_tbi_price = px.bar(
-            tbi_summary,
-            x="Customer",
-            y="total_price",
+            tbi_summary_sorted,
+            y="Customer",  # ✅ Prebačeno na Y-osu
+            x="total_price",  # ✅ Prebačeno na X-osu
             color="Status",
-            title="Test Before Invest - Service Price by Customer and Status",
-            labels={"total_price": "Total Service Price (€)", "Customer": "Customer"},
-            barmode="group",
-            height=600
+            orientation='h',  # ✅ Horizontalna orijentacija
+            title="Test Before Invest - Service Value by Customer and Status",
+            labels={
+                "total_price": "Total Service Value (€)", 
+                "Customer": "Organization"
+            },
+            barmode="stack",  # ✅ Stack umjesto group za bolju preglednost
+            height=max(400, len(tbi_summary_sorted) * 25),  # ✅ Dinamička visina
+            color_discrete_sequence=px.colors.qualitative.Vivid,
+            text_auto='.0f'  # ✅ Prikaži vrijednosti
         )
-        st.plotly_chart(fig_tbi_price, config={'displayModeBar': True, 'displaylogo': False})
-        with st.expander("Tabular data"):    
-            # st.dataframe(tbi_summary, width=True)
-            st.table(tbi_summary)
-       
-         # Additional Graph for Specific TBI Support Types
+
+        fig_tbi_price.update_layout(
+            xaxis_title="Service Value (€)",
+            yaxis_title="",
+            showlegend=True,
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1
+            ),
+            margin=dict(l=200, r=40, t=80, b=60)  # ✅ Više mjesta za nazive
+        )
+
+        st.plotly_chart(fig_tbi_price, config={'displayModeBar': True, 'displaylogo': False}, use_container_width=True)
+
+        with st.expander("📋 Service value data"):
+            st.table(tbi_summary_sorted[['Customer', 'Status', 'total_price', 'total_mandays']])
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # GRAF 2: TBI Support Types (AGREGIRAN PO TIPU)
+        # ═══════════════════════════════════════════════════════════════════════════
+
+        st.subheader("🔧 TBI Support Type Distribution")
+
         tbi_keywords = [
             "TBI support - new products and services", 
             "TBI support - digital transformation", 
@@ -1004,30 +1240,69 @@ with col1:
         tbi_filtered['TBI Type'] = tbi_filtered['Short description of the service'].apply(
             lambda x: next((keyword for keyword in tbi_keywords if keyword.lower() in x.lower()), None)
         )
-        # Calculate mandays (Service Price / 1000)
-        tbi_filtered["Mandays"] = tbi_filtered["Service price, €"] / 1000        
 
+        # Calculate mandays with cutoff logic
+        tbi_filtered['Start Date'] = pd.to_datetime(tbi_filtered['Start Date'], dayfirst=True)
+        cutoff = pd.Timestamp("2025-02-01")
+        tbi_filtered.loc[tbi_filtered['Start Date'] < cutoff, 'Mandays'] = tbi_filtered['Service price, €'] / 1000
+        tbi_filtered.loc[tbi_filtered['Start Date'] >= cutoff, 'Mandays'] = tbi_filtered['Service price, €'] / 1250
+
+        # ✅ OPCIJA 1: Agregirano po TBI tipu (jednostavniji prikaz)
+        tbi_type_aggregated = tbi_filtered.groupby("TBI Type").agg(
+            total_customers=("Customer", "nunique"),
+            total_mandays=("Mandays", "sum"),
+            total_price=("Service price, €", "sum")
+        ).reset_index().sort_values('total_mandays', ascending=True)
+
+        # Skraćeni nazivi za bolji prikaz
+        tbi_type_aggregated['TBI Type Short'] = tbi_type_aggregated['TBI Type'].apply(
+            lambda x: x.replace('TBI support - ', '').replace('Test before invest - ', '').title()
+        )
+
+        # Agregacija podataka
         tbi_type_summary = tbi_filtered.groupby(["TBI Type", "Customer"]).agg(
             total_price=("Service price, €", "sum"),
             total_mandays=("Mandays", "sum")
         ).reset_index()
 
-        # Display TBI Type Summary Table
-        # st.write("TBI Support Type Summary")
-        # st.dataframe(tbi_type_summary, width=True)
+        # Skraćeni nazivi TBI tipova za bolji prikaz
+        tbi_type_summary['TBI Type Short'] = tbi_type_summary['TBI Type'].apply(
+            lambda x: x.replace('TBI support - ', '').replace('Test before invest - ', '').title()
+)
 
-        # Bar Chart for TBI Support Types by Customer
-        fig_tbi_types = px.bar(
+        # ═══════════════════════════════════════════════════════════════════════════
+        # SUNBURST DIJAGRAM - Hijerarhijski prikaz
+        # ═══════════════════════════════════════════════════════════════════════════
+
+        fig_sunburst = px.sunburst(
             tbi_type_summary,
-            x="Customer",
-            y="total_mandays",
-            color="TBI Type",
-            title="TBI Support Analysis by Customer",
-            labels={"total_mandays": "Total Mandays", "Customer": "Customer", "TBI Type": "TBI Support Type"},
-            barmode="group",
-            height=600
+            path=['TBI Type Short', 'Customer'],
+            values='total_mandays',
+            color='total_mandays',
+            color_continuous_scale=EDIH_CONTINUOUS_SCALE,
+            title='TBI Types and Customers - Interactive Hierarchy',
+            hover_data={
+                'total_mandays': ':.1f',
+                'total_price': ':.0f'
+            },
+            height=700
         )
-        st.plotly_chart(fig_tbi_types, config={'displayModeBar': True, 'displaylogo': False})
+
+        fig_sunburst.update_traces(
+            textinfo="label+percent parent",
+            hovertemplate='<b>%{label}</b><br>Mandays: %{value:.1f}<br>Percent: %{percentParent}<extra></extra>'
+        )
+
+        fig_sunburst.update_layout(
+            margin=dict(t=80, l=0, r=0, b=0)
+        )
+
+        st.plotly_chart(fig_sunburst, config={'displayModeBar': True, 'displaylogo': False}, use_container_width=True)
+
+        st.info("💡 **Tip:** Klikni na segment za zoom in, klikni u centar za zoom out")
+
+
+
          
         # Count Customers per Technology Type
         tbi_tech_summary = tbi_filtered.groupby("Technology type used").agg(
@@ -1041,12 +1316,152 @@ with col1:
             tbi_tech_summary,
             x="total_customers",
             y="Technology type used",
+            color="total_customers",  # Gradient po broju korisnika
+            color_continuous_scale=EDIH_CONTINUOUS_SCALE,
             title="TBI Customers by Technology Type",
             labels={"total_customers": "Total Customers", "Technology type used": "Technology Type"},
             height=600
         )
         st.plotly_chart(fig_tbi_tech, config={'displayModeBar': True, 'displaylogo': False})
-    
+
+        # TBI timeline po godinama
+        tbi_timeline = tbi_data.groupby('Start Year').agg(
+            total_services=('Customer', 'count'),
+            total_mandays=('Mandays', 'sum')
+        ).reset_index()
+
+        fig_timeline = px.line(
+            tbi_timeline,
+            x='Start Year',
+            y='total_mandays',
+            markers=True,
+            title='TBI Mandays Trend Over Time',
+            labels={'total_mandays': 'Total Mandays', 'Start Year': 'Year'}
+)
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # INTEGRACIJA TBI IZVJEŠTAJA (kao DMA)
+        # ═══════════════════════════════════════════════════════════════════════════
+        
+        st.subheader("📄 TBI Detailed Reports by Organization")
+        
+        # Folder paths for TBI reports
+
+
+        tbi_pdf_folder = app_folder_path / "TBI"
+        
+        if not tbi_pdf_folder.exists():
+            st.warning(f"⚠️ TBI folder does not exist: {tbi_pdf_folder}")
+        else:
+            # Get list of organizations from TBI data
+            tbi_organizations = sorted(tbi_data['Customer'].dropna().unique())
+            
+            if len(tbi_organizations) == 0:
+                st.info("No TBI organizations found in the data.")
+            else:
+                # Organization selector
+                selected_tbi_org = st.selectbox(
+                    "Select Organization:",
+                    tbi_organizations,
+                    key="tbi_org_selector"
+                )
+
+            # ✅ PRETRAŽIVANJE KAO ZA DATOTEKE - traži foldere koji sadrže naziv organizacije
+            org_folder = find_best_folder_match(selected_tbi_org, tbi_pdf_folder)
+            
+            if org_folder is None:
+                st.warning(f"⚠️ No folder found for {selected_tbi_org}")
+                st.info("Available folders:")
+                for f in sorted(tbi_pdf_folder.iterdir()):
+                    if f.is_dir():
+                        st.text(f"  - {f.name}")
+            else:
+                # Prikaži pronađeni folder
+                st.success(f"✅ Found folder: {org_folder.name}")
+                
+                report_folder = org_folder / "Izvješće - za korisnika"
+                
+                if not report_folder.exists():
+                    st.warning(f"⚠️ No report folder found in {org_folder.name}")
+                    st.info(f"Expected subfolder: 'Izvješće - za korisnika'")
+                    
+                    # Prikaži što postoji u folderu
+                    st.write("Available subfolders:")
+                    for subfolder in org_folder.iterdir():
+                        if subfolder.is_dir():
+                            st.text(f"  - {subfolder.name}")
+                else:
+                    # Find all PDFs in the folder
+                    pdf_files = sorted(
+                        report_folder.glob("*.pdf"),
+                        key=os.path.getmtime,
+                        reverse=True
+                    )
+                    
+                    if not pdf_files:
+                        st.warning(f"⚠️ No PDF reports found for {selected_tbi_org}")
+                    else:
+                        st.success(f"✅ Found {len(pdf_files)} report(s)")
+                        
+                        # If multiple PDFs, let user select
+                        if len(pdf_files) > 1:
+                            selected_pdf = st.selectbox(
+                                "Select Report:",
+                                pdf_files,
+                                format_func=lambda x: x.name,
+                                key="tbi_pdf_selector"
+                            )
+                        else:
+                            selected_pdf = pdf_files[0]
+                            st.info(f"📄 Report: {selected_pdf.name}")
+                        
+                        # Action buttons
+
+                        if st.button("👁️ View TBI Report", key="view_tbi_pdf"):
+                            st.write(f"Displaying: {selected_pdf.name}")
+                            try:
+                                with open(selected_pdf, "rb") as pdf_file:
+                                    pdf_bytes = pdf_file.read()
+                                    
+                                # Download button
+                                st.download_button(
+                                    label="💾 Download PDF",
+                                    data=pdf_bytes,
+                                    file_name=selected_pdf.name,
+                                    mime="application/pdf",
+                                    key="download_tbi_pdf"
+                                )
+                                
+                                # Display PDF using base64
+                                base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+                                pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800" type="application/pdf"></iframe>'
+                                st.markdown(pdf_display, unsafe_allow_html=True)
+                                
+                            except Exception as e:
+                                st.error(f"Error loading PDF: {e}")
+                        
+
+                        if st.button("🧠 AI Summary of Report", key="ai_tbi_summary"):
+                            with st.spinner(f"AI is analyzing {selected_pdf.name}..."):
+                                try:
+                                    # Extract text from PDF
+                                    text = extract_text_intelligent(str(selected_pdf))
+                                    
+                                    if not text or len(text.strip()) < 50:
+                                        st.warning("⚠️ Could not extract enough text from PDF")
+                                    else:
+                                        # Generate summary
+                                        summary = summarize_text(text)
+                                        
+                                        st.subheader("📝 AI Summary")
+                                        st.write(summary)
+                                        
+                                except Exception as e:
+                                    st.error(f"Error generating summary: {e}")
+                                    import traceback
+                                    st.code(traceback.format_exc())
+
+
     elif analysis_type == "DAP&FCO - Summary":
         st.subheader("DAP & FCO Analysis")
         with st.expander("Explanation of Results"):
