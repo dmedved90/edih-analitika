@@ -19,8 +19,15 @@ from io import BytesIO
 import plotly.io as pio
 import hmac
 
+app_folder = str(Path.home() / "EDIH")
+app_folder_path = Path(app_folder)  # Konverzija stringa u Path objekt
+data_folder = os.path.join(app_folder, "Data")
+dma_folder = os.path.join(app_folder, "DMA")
+slike_folder = os.path.join(app_folder, "Slike")
+
 def check_password():
     """Returns `True` if the user had the correct password."""
+    
     def password_entered():
         if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
             st.session_state["password_correct"] = True
@@ -31,15 +38,101 @@ def check_password():
     if st.session_state.get("password_correct", False):
         return True
 
-    st.text_input("🔐 Password", type="password", on_change=password_entered, key="password")
+    # Hide sidebar on login page
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"] {display: none;}
+        </style>
+    """, unsafe_allow_html=True)
     
-    if "password_correct" in st.session_state:
-        st.error("😕 Incorrect password")
+    # Spacer for vertical centering
+    st.markdown("<br><br><br>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([0.5, 3, 0.5])  # Širi srednji stupac
+    
+    with col2:
+        # Use Streamlit's built-in container with border
+        with st.container(border=True):
+            
+            # Logo - centriran i veći
+            logo_path = slike_folder + "/Edih Adria znak+logotip.jpg"
+            if os.path.exists(logo_path):
+                # Kreiranje centiranih kolona za logo
+                logo_col1, logo_col2, logo_col3 = st.columns([0.5, 2, 0.5])
+                with logo_col2:
+                    st.image(logo_path, use_container_width=True)
+            else:
+                st.markdown("""
+                    <h1 style='text-align: center; color: #2E7D32;'>
+                        📊 EDIH ADRIA
+                    </h1>
+                """, unsafe_allow_html=True)
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Title and description
+            st.markdown("""
+                <h2 style='text-align: center; color: #333; margin-bottom: 5px;'>
+                    Analytics Dashboard
+                </h2>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("""
+                <p style='text-align: center; color: #666; font-size: 16px; margin-bottom: 30px;'>
+                    Digital Innovation Hub Adriatic
+                </p>
+            """, unsafe_allow_html=True)
+            
+            # Password field - centriran
+            pass_col1, pass_col2, pass_col3 = st.columns([0.3, 2, 0.3])
+            with pass_col2:
+                st.text_input(
+                    "🔐 Enter Password", 
+                    type="password", 
+                    on_change=password_entered, 
+                    key="password",
+                    placeholder="Password",
+                )
+                
+                # Error message
+                if "password_correct" in st.session_state:
+                    st.error("❌ Incorrect password. Please try again.")
+            
+            # Help text
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("""
+                <div style='text-align: center; color: #999; font-size: 13px;'>
+                    <p>🔒 Authorized access only</p>
+                    <p style='font-size: 11px; margin-top: 8px; color: #bbb;'>
+                        Contact administrator if you need access
+                    </p>
+                </div>
+            """, unsafe_allow_html=True)
+    
+    # Footer
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.markdown("""
+        <div style='text-align: center; color: #ccc; font-size: 11px;'>
+            <p>EDIH ADRIA © 2025 | Powered by Streamlit</p>
+        </div>
+    """, unsafe_allow_html=True)
     
     return False
+# ═══════════════════════════════════════════════════════════════════════════
+# CHECK PASSWORD BEFORE CONTINUING
+# ═══════════════════════════════════════════════════════════════════════════
 
 if not check_password():
     st.stop()
+
+# ✅ Ako je password točan, nastavi s normalnom aplikacijom
+# Dodaj logout button u sidebar nakon uspješnog logina
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 👤 User Session")
+if st.sidebar.button("🚪 Logout", use_container_width=True):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 # 🌈 GLOBALNA PLOTLY TEMA (EDIH vizualni identitet)
 pio.templates["edih_theme"] = pio.templates["plotly_white"]
@@ -95,15 +188,6 @@ with st.sidebar:
 
 # Suppress openpyxl data validation warnings
 warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
-
-# Folder where CSV or XML data will be saved
-
-app_folder = str(Path.home() / "EDIH")
-app_folder_path = Path(app_folder)  # Konverzija stringa u Path objekt
-data_folder = os.path.join(app_folder, "Data")
-dma_folder = os.path.join(app_folder, "DMA")
-slike_folder = os.path.join(app_folder, "Slike")
-
 
 
 
