@@ -1,28 +1,35 @@
-# Python / Streamlit
+# --- Python & Streamlit ---
 __pycache__/
-.venv/
-venv/
 *.pyc
 *.pyo
 *.pyd
 *.db
-*.log
-.streamlit/secrets.toml
+*.sqlite3
+.venv/
+venv/
 .env
-
-# Data and cache
-data/
-*.pdf
-*.xlsx
-*.csv
-*.json
-.cache/
-.streamlit/cache/
-__pycache__/
 .DS_Store
 
-# IDE / OS
-.vscode/
-.idea/
-*.swp
+# --- Streamlit cache ---
+.streamlit/
+.stcache/
+.cache/
+
+# --- Temporary data & analysis ---
+*.xlsx
+*.xls
+*.csv
+*.docx
+*.pdf
+*.json
+*.zip
+*.tar
+*.bak
+*.tmp
+*.log
+
+# --- Project folders to ignore ---
+/DMA/SME/Assesment/
+/DMA/PSO/Assesment/
+/DMA/**/Assesment/
 

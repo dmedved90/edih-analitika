@@ -14,10 +14,37 @@ import numpy as np
 import pydeck as pdk
 from pathlib import Path
 import fitz  # PyMuPDF
-import base64, io, json, os, time, random
+import base64, io, json, os, time, random, glob
 from io import BytesIO
+import plotly.io as pio
 
+# 🌈 GLOBALNA PLOTLY TEMA (EDIH vizualni identitet)
+pio.templates["edih_theme"] = pio.templates["plotly_white"]
 
+# Podešavanje boja i fontova
+pio.templates["edih_theme"].layout.update(
+    font=dict(family="Arial, sans-serif", size=14, color="#333333"),
+    title=dict(font=dict(size=20, color="#222222"), x=0.02, xanchor="left"),
+    paper_bgcolor="white",
+    plot_bgcolor="white",
+    margin=dict(l=60, r=40, t=80, b=60),
+    coloraxis_colorbar=dict(title_font=dict(size=14)),
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=-0.25,
+        xanchor="center",
+        x=0.5,
+        font=dict(size=13)
+    )
+)
+
+# Zadana kvalitativna (kategorijska) paleta — harmonična i visoko kontrastna
+default_colors = px.colors.qualitative.Vivid  # alternativno: Plotly, Bold, Prism
+EDIH_CONTINUOUS_SCALE = "Tealgrn"  # ili "Agsunset", "Tealgrn", "Blues", "Viridis"
+
+# Aktiviraj EDIH temu globalno
+pio.templates.default = "edih_theme"
 
 # --- Automatska provjera preglednika (sažeta sidebar verzija) ---
 with st.sidebar:
@@ -279,46 +306,81 @@ def safe_df(df):
         df[col] = df[col].astype(str)
     return df
 
+# --- Helper funkcija za pronalazak najnovije datoteke po prefiksu ---
+def get_latest_file(folder, prefix, extension="xlsx"):
+    pattern = os.path.join(folder, f"{prefix}*.{extension}")
+    files = glob.glob(pattern)
+    if not files:
+        st.warning(f"Nije pronađena datoteka za prefiks: {prefix}")
+        return None
+    latest_file = max(files, key=os.path.getmtime)
+    # st.info(f"📄 Učitavam najnoviju datoteku: `{os.path.basename(latest_file)}`")
+    return latest_file
+
+# --- Cache: učitaj Excel samo jednom ---
+@st.cache_data(show_spinner=False)
+def load_excel_file(path, sheet_name=None):
+    """Učitaj Excel datoteku i očisti nazive kolona."""
+    if not path:
+        return pd.DataFrame()
+
+    # 1️⃣ Učitaj Excel datoteku
+    df = pd.read_excel(path, sheet_name=sheet_name)
+
+    # Ako read_excel vrati dict (više sheetova)
+    if isinstance(df, dict):
+        first_sheet = list(df.keys())[0]
+        # st.warning(f"⚠️ Datoteka {os.path.basename(path)} ima više listova — koristi se '{first_sheet}'")
+        df = df[first_sheet]
+
+    # 2️⃣ Očisti nazive kolona
+    df.columns = (
+        df.columns.astype(str)
+        .str.replace('"', '')
+        .str.replace("'", "")
+        .str.replace(r'\s+', ' ', regex=True)
+        .str.strip()
+    )
+
+    return df
 
 # PDF & JSON folder location
 pdf_folder = app_folder + "/DMA/SME"
 json_folder = app_folder + "/DMA/SME/JSON"
 
-# Load XLS files
-file_services = data_folder + '/EDIH_uploaded_services_102025.xlsx'  # Update the path in deployment
-sheet_name = "Sheet1"
-data = load_uploaded_services(file_services, sheet_name)
-# st.write(data[['Dates', 'Start Date', 'End Date']].head(10))
-# st.dataframe(data, width=True)
+# --- Automatsko učitavanje najnovijih datoteka iz data_foldera ---
 
-file_SME = data_folder + '/export-sme-102025.xlsx'  # Update the path in deployment
-sheet_name = "Reporting of EDIH services del"
-data_sme = load_data(file_SME, sheet_name)
-# st.dataframe(data_sme, width=True)
+# 1️⃣ EDIH Services (posebna funkcija koja dodaje dodatne kolone)
+file_services = get_latest_file(data_folder, "EDIH_uploaded_services_")
+if file_services:
+    data = load_uploaded_services(file_services, "Sheet1")
+    # st.success("✅ EDIH Services učitani s dodatnim kolumnama (Start/End Year, trajanje, datumi, itd.)")
+else:
+    data = pd.DataFrame()
+    st.warning("⚠️ EDIH Services datoteka nije pronađena.")
 
-file_PSO = data_folder + '/export-pso-102025.xlsx'  # Update the path in deployment
-sheet_name = "Reporting of EDIH services del"
-data_pso = load_data(file_PSO, sheet_name)
-# st.dataframe(data_pso, width=True)
+# 2️⃣ SME i PSO - Reporting
+file_SME = get_latest_file(data_folder, "export-sme-")
+data_sme = load_excel_file(file_SME, sheet_name="Reporting of EDIH services del")
 
-file_SME_Ana = data_folder + '/my-smes-dma-results-102025.xlsx'  # Update the path in deployment
-sheet_name = "My SMEs DMA Results"
-data_smea = load_data(file_SME_Ana, sheet_name)
-# st.dataframe(data_smea, width=True)
+file_PSO = get_latest_file(data_folder, "export-pso-")
+data_pso = load_excel_file(file_PSO, sheet_name="Reporting of EDIH services del")
 
-file_PSO_Ana = data_folder + '/my-psos-dma-results-102025.xlsx'  # Update the path in deployment
-sheet_name = "My PSOs DMA Results"
-data_psoa = load_data(file_PSO_Ana, sheet_name)
-# st.dataframe(data_psoa, width=True)
+# 3️⃣ DMA rezultati
+file_SME_Ana = get_latest_file(data_folder, "my-smes-dma-results-")
+data_smea = load_excel_file(file_SME_Ana, sheet_name="My SMEs DMA Results")
 
-# Load new dataset for State Aid Summary
-data_path = data_folder + '/evidencija-zahtjeva-062025.xlsx'
-ps_data = pd.read_excel(data_path, sheet_name='Korisnici - javni sektor')
-sme_data = pd.read_excel(data_path, sheet_name='Skupni podaci Zahtjeva-poduzeća')
+file_PSO_Ana = get_latest_file(data_folder, "my-psos-dma-results-")
+data_psoa = load_excel_file(file_PSO_Ana, sheet_name="My PSOs DMA Results")
 
-# Load new EDIH data for EU comparison
-file_edih_list = data_folder + '/updated_edih_list_with_columns_022025.xlsx'
-edih_data = pd.read_excel(file_edih_list)
+# 4️⃣ Evidencija zahtjeva
+file_zahtjevi = get_latest_file(data_folder, "evidencija-zahtjeva-")
+ps_data = load_excel_file(file_zahtjevi, sheet_name="Korisnici - javni sektor")
+sme_data = load_excel_file(file_zahtjevi, sheet_name="Skupni podaci Zahtjeva-poduzeća")
+
+# 5️⃣ EDIH EU lista
+file_edih_list = get_latest_file(data_folder, "updated_edih_list_with_columns_")
+edih_data = load_excel_file(file_edih_list)
 
 # Geocode if needed
 # edih_data = geocode_addresses(edih_data, file_edih_list)
@@ -367,6 +429,13 @@ analysis_type = st.sidebar.selectbox(
             "ESG - Summary",
         ]
     )
+
+with st.sidebar.expander("📂 Učitane datoteke"):
+    for prefix in ["EDIH_uploaded_services_", "export-sme-", "export-pso-", "my-smes-dma-results-", "my-psos-dma-results-", "evidencija-zahtjeva-", "updated_edih_list_with_columns_"]:
+        latest = get_latest_file(data_folder, prefix)
+        if latest:
+            st.markdown(f"**{prefix}** → `{os.path.basename(latest)}`")
+
 
 with col1:
 # Analysis Functions
@@ -439,7 +508,7 @@ with col1:
             x='Customer  region',
             y='total_services',
             title='Delivered Services by Region',
-            labels={'total_services': 'Number of Services', 'Customer  region': 'Region'},
+            labels={'total_services': 'Number of Services', 'Customer region': 'Region'},
             text='total_services'
         )
         fig.update_traces(textposition='outside')
@@ -459,6 +528,8 @@ with col1:
             service_summary,
             x='Service category delivered',
             y='total_services',
+            color="total_services",
+            color_continuous_scale=EDIH_CONTINUOUS_SCALE,
             title='Delivered Services by Category',
             labels={'total_services': 'Number of Services', 'Service category delivered': 'Category'},
             text='total_services'
@@ -484,16 +555,51 @@ with col1:
             total_attendees=('Number of attendees', 'sum')
         ).reset_index().sort_values(by='total_revenue', ascending=False)
 
-        # st.write(technology_summary)
+        # Ako ima puno tehnologija, spoji manje u "Other"
+        max_segments = 7  # koliko najvećih zadržati
+        if len(technology_summary) > max_segments:
+            top = technology_summary.nlargest(max_segments, "total_services")
+            others = technology_summary.iloc[max_segments:]
+            other_row = pd.DataFrame({
+                "Technology type used": ["Other"],
+                "total_services": [others["total_services"].sum()],
+                "total_revenue": [others["total_revenue"].sum()],
+                "total_attendees": [others["total_attendees"].sum()]
+            })
+            technology_summary = pd.concat([top, other_row], ignore_index=True)
+
+        # Skrati nazive tehnologija za prikaz na grafu
+        def shorten_label(label, max_length=25):
+            return label if len(label) <= max_length else label[:max_length] + "…"
+
+        technology_summary["Short Label"] = technology_summary["Technology type used"].apply(shorten_label)
+
         fig = px.pie(
             technology_summary,
-            names='Technology type used',
+            names='Short Label',
             values='total_services',
+            hover_name="Technology type used",  # puni naziv u tooltipu
             title='Technologies applied in EDIH ADRIA Services',
-
+            color_discrete_sequence=px.colors.qualitative.Vivid,
             hole=0.4
         )
+
+        fig.update_traces(
+            textinfo="label+percent",
+            textposition="outside",
+            showlegend=False,
+            pull=[0.05]*len(technology_summary),  # malo izvuci segmente radi preglednosti
+        )
+
+        fig.update_layout(
+            uniformtext_minsize=10,
+            uniformtext_mode="hide",
+            margin=dict(t=80, b=60, l=40, r=40),
+            height=600
+        )        
+
         st.plotly_chart(fig, config={'displayModeBar': True, 'displaylogo': False})
+
         with st.expander("Tabular data"):    
             # st.dataframe(safe_df(technology_summary), width=True)
             st.table(technology_summary)
@@ -510,6 +616,8 @@ with col1:
             customer_size_analysis,
             x='Customer staff size',
             y='total_services',
+            color="total_services",
+            color_continuous_scale=EDIH_CONTINUOUS_SCALE,
             title='Delivered Services by Customer Staff Size',
             labels={'total_services': 'Number of Services', 'Customer staff size': 'Staff Size'},
             text='total_services'
@@ -519,24 +627,38 @@ with col1:
         with st.expander("Tabular data"):    
             # st.dataframe(safe_df(customer_size_analysis), width=True)
             st.table(customer_size_analysis)
-        # Services Delivered by Year       
+
+        # Services Delivered by Year 
+        # st.write(list(data.columns))      
         yearly_summary = data.groupby('Start Year').agg(
             total_services=('Content ID', 'count'),
             total_revenue=('Service price, €', 'sum')
-        ).reset_index().sort_values(by='total_revenue', ascending=True)
+        ).reset_index().sort_values(by='Start Year', ascending=True) #total_revenue
+
         # st.subheader("Yearly Analysis")
+        # Pretvori godine u string za pravilno etiketiranje osi
+        yearly_summary["Start Year"] = yearly_summary["Start Year"].round().astype(int).astype(str)
+        
         # st.write(yearly_summary)
         fig = px.bar(
             yearly_summary,
             x='Start Year',
             y='total_services',
             title='Delivered Services by Year',
+            color="total_services",
+            color_continuous_scale=EDIH_CONTINUOUS_SCALE,
             labels={'total_services': 'Number of Services', 'Start Year': 'Year'},
             text='total_services'
         )
-        #st.plotly_chart(fig, config={'displayModeBar': True, 'displaylogo': False})
-        #with st.expander("Tabular data"):    
-        #    st.dataframe(yearly_summary, width=True)
+        # Ručno postavi da je osa kategorička i da se prikazuje po redu godina
+        fig.update_xaxes(type="category", categoryorder="array",
+                 categoryarray=sorted(yearly_summary["Start Year"].unique()))
+
+        st.plotly_chart(fig, config={'displayModeBar': True, 'displaylogo': False})
+        
+        with st.expander("Tabular data"):    
+            # st.dataframe(yearly_summary, width=True)
+            st.table(yearly_summary)
 
     elif analysis_type == "EU EDIH Comparison":
         st.subheader("EU EDIH Comparison")
@@ -554,7 +676,7 @@ with col1:
         # Set a minimum radius for points with EDUC = 0 (e.g., 100)
         edih_data["Radius"] = edih_data["EDUC"].apply(lambda x: max(x * 50, 1000))  # Minimum size 100
         
-                # Define Map View
+        # Define Map View
         view_state = pdk.ViewState(
             latitude=edih_data["Latitude"].mean(),
             longitude=edih_data["Longitude"].mean(),
@@ -632,6 +754,7 @@ with col1:
                     ticktext=ranking_columns
                 ),
                 yaxis=dict(title="EDIHs"),
+                coloraxis=dict(colorscale=EDIH_CONTINUOUS_SCALE),
                 annotations=annotations  # Add rotated top x-axis labels
             )          
 
@@ -1180,24 +1303,25 @@ with col1:
                     st.metric("Human Centric Digitalisation (%):", value=int(selected_data["Human-Centric Digitalisation"].mean()), delta=100, border=True)
                     st.metric("Green Digitalisation (%):", value=int(selected_data["Green Digitalisation"].mean()), delta=100, border=True)
 
+        # Clean column names
+        selected_data.columns = selected_data.columns.str.replace('"', '').str.strip()
+        full_data = selected_data.copy()  # čuva sve kolone
 
         # Extract dimensions for the radar chart (between DMA Score and EDIH name)
         dma_start_col = selected_data.columns.get_loc("DMA Score")
         dma_end_col = selected_data.columns.get_loc("EDIH Name")
         dma_columns = selected_data.columns[dma_start_col + 1 : dma_end_col]
-        
+
         # Extract relevant DMA score columns
         dma_score_columns = [col for col in selected_data.columns if "DMA Score" in col]
-        
+
         if org_column in selected_data.columns:
             organization_names = selected_data[org_column].dropna().unique()
             
-            # Create a DataFrame for the heatmap
+            # --- 1️⃣ DMA Heatmap ---
             heatmap_data = selected_data.set_index(org_column)[dma_columns]
             heatmap_data = heatmap_data.dropna()
-            
 
-            # Generate Heatmap using go.Heatmap
             fig_heatmap = go.Figure()
 
             fig_heatmap.add_trace(go.Heatmap(
@@ -1208,7 +1332,6 @@ with col1:
                 colorbar=dict(title="Rating")
             ))
 
-            # Add top x-axis labels using annotations
             annotations = []
             for i, col in enumerate(heatmap_data.columns):
                 annotations.append(
@@ -1218,11 +1341,10 @@ with col1:
                         text=col, 
                         showarrow=False,
                         font=dict(size=12, color="lightgray"),
-                        textangle=45  # Rotate text by 45 degrees
+                        textangle=45
                     )
                 )
 
-            # Configure Layout
             fig_heatmap.update_layout(
                 title="DMA Score Heatmap",
                 height=1200,
@@ -1235,12 +1357,11 @@ with col1:
                     ticktext=heatmap_data.columns
                 ),
                 yaxis=dict(title="Dimensions"),
-                annotations=annotations  # Add top x-axis labels manually
+                annotations=annotations
             )
 
             st.plotly_chart(fig_heatmap, config={'displayModeBar': True, 'displaylogo': False})
-        else:
-            st.warning(f"'{org_column}' column is missing in the dataset.")     
+
      
         # st.subheader("📁 DMA dokumenti po organizaciji (T0 / T1 / T2)")
 
@@ -1337,60 +1458,105 @@ with col1:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         
-        
-        # Validate the organization column
-        if org_column not in selected_data.columns:
-            st.error(f"'{org_column}' column is missing in the dataset.")
-        else:
-            organization_name = st.selectbox("Select Organization:", sorted(selected_data[org_column].dropna().unique()))
 
-            # Filter data for the selected organization
-            organization_scores = selected_data[selected_data[org_column] == organization_name][dma_columns].iloc[0]
+            st.subheader("📊 Detaljni pregled organizacije")
 
-            fig = go.Figure()
-            fig.add_trace(go.Scatterpolar(
-                r=organization_scores.values,
-                theta=dma_columns,
-                fill='toself',
-                name=organization_name
-            ))
-
-            fig.update_layout(
-                polar=dict(
-                    radialaxis=dict(visible=True, range=[0, 100], color="magenta")
-                ),
-                title=f"DMA Scores for {organization_name}",
-                showlegend=True
+            organization_name = st.selectbox(
+                "Odaberi organizaciju:",
+                sorted(organization_names)
             )
+           
+            org_records = full_data[full_data[org_column] == organization_name]
+            # st.dataframe(org_records, use_container_width=True)
+            # org_records = selected_data[selected_data[org_column] == organization_name]
 
-            st.plotly_chart(fig, config={'displayModeBar': True, 'displaylogo': False})
+            if org_records.empty:
+                st.warning("⚠️ Nema dostupnih DMA zapisa za ovu organizaciju.")
+            else:
+                if "DMA Timing" not in org_records.columns:
+                    st.error("Kolona 'DMA Timing' nije pronađena u datasetu.")
+                else:
+                    # Prepoznaj sve numeričke metrike osim identificirajućih kolona
+                    skip_cols = [org_column, "DMA Timing", "EDIH Name", "DMA Score", "SME ID", "PSO ID"]
+                    metric_cols = [
+                        c for c in org_records.columns
+                        if c not in skip_cols and org_records[c].dtype in [int, float]
+                    ]
+
+                    fig_radar = go.Figure()
+
+                    # Faze DMA (T0, T1, T2)
+                    available_timings = org_records["DMA Timing"].dropna().unique()
+
+                    for stage in ["T0", "T1", "T2"]:
+                        if stage in available_timings:
+                            stage_row = org_records[org_records["DMA Timing"] == stage].iloc[0]
+                            values = [stage_row[c] for c in metric_cols]
+                            fig_radar.add_trace(go.Scatterpolar(
+                                r=values,
+                                theta=metric_cols,
+                                fill='toself',
+                                name=stage
+                            ))
+
+                    fig_radar.update_layout(
+                        title=f"Digital Maturity Progression – {organization_name}",
+                        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                        showlegend=True,
+                        template="plotly_white"
+                    )
+
+                    st.plotly_chart(fig_radar, config={'displayModeBar': True, 'displaylogo': False})
+
+                    # Opcionalno: prikaži sirove podatke
+                    with st.expander("📋 Pogledaj tablične rezultate"):
+                        st.dataframe(org_records, use_container_width=True)
+
 
             # ---- Add PDF Display Logic ----
-            st.subheader("Detailed DMA Report")
+            st.subheader("📄 Detailed DMA Report")
 
-            # Locate PDF file matching organization name
-            # st.write(pdf_folder)            
-            pdf_files = [f for f in os.listdir(pdf_folder) if organization_name.lower() in f.lower() and f.endswith(".pdf")]
+            # Pronađi sve PDF-ove koji sadrže naziv organizacije (neovisno o velikim/malim slovima)
+            pdf_files = [
+                f for f in os.listdir(pdf_folder)
+                if organization_name.lower() in f.lower() and f.lower().endswith(".pdf")
+            ]
 
             if pdf_files:
-                pdf_path = os.path.join(pdf_folder, pdf_files[0])
-                # st.write(pdf_path)
-                # Button to show PDF
-                if st.button(f"Show DMA Report for {organization_name}"):
-                    st.write(f"Display deatiled PDF report: {pdf_files[0]}")
-                    # pdf_viewer(pdf_path,height=800)
-                    st.pdf(pdf_path, height=800)
-                # Extract text from PDF and send for summarization
-                if st.button(f"Ask AI to Summarize Report for {organization_name}"):
+                # Sortiraj prema DMA oznaci ako postoji (T0, T1, T2)
+                pdf_files = sorted(pdf_files, key=lambda x: ("T0" in x, "T1" in x, "T2" in x), reverse=True)
 
-                    with st.spinner("Generating summary..."):
+                # Pokaži korisniku koje su datoteke pronađene
+                st.markdown(f"Pronađeni izvještaji za **{organization_name}**:")
+                for f in pdf_files:
+                    st.markdown(f"- {f}")
+
+                # Omogući odabir konkretne verzije (T0 / T1 / T2)
+                selected_pdf = st.selectbox(
+                    "📑 Odaberi DMA izvještaj:",
+                    pdf_files,
+                    format_func=lambda x: os.path.splitext(x)[0]  # prikazuje bez ekstenzije
+                )
+
+                pdf_path = os.path.join(pdf_folder, selected_pdf)
+
+                # --- Akcije korisnika ---
+
+                if st.button("👁️ Prikaži PDF izvještaj"):
+                    st.write(f"Prikazujem detaljni PDF izvještaj: `{selected_pdf}`")
+                    st.pdf(pdf_path, height=800)
+
+                if st.button("🧠 AI sažetak izvještaja"):
+                    with st.spinner(f"AI analizira {selected_pdf}..."):
                         summary_text = get_summary(organization_name)
-                    st.subheader("Report Summary")
+                    st.subheader("📝 Sažetak izvještaja")
                     st.write(summary_text)
-                    #else:
-                    #    st.warning("Could not extract text from the PDF.")
+
             else:
-                st.warning(f"No report found for {organization_name}")
+                st.warning(f"⚠️ Nije pronađen nijedan PDF izvještaj za **{organization_name}**.")
+
+
+
 
 # Right sidebar section
 with col2:
@@ -1472,7 +1638,7 @@ with col2:
     elif analysis_type == "DAP&FCO - Summary":
         # bootcamp_data['Customer'] = bootcamp_data['Customer'].astype(str).str.strip().str.lower()        
         total_customers = len(dap_data)
-        target_customers = 25
+        target_customers = 50
         
         # Calculate percentage of the target achieved
         percentage_achieved = (total_customers / target_customers) * 100
@@ -1690,5 +1856,5 @@ with col2:
 # Footer
 # st.sidebar.info("EDIH ADRIA KPI Dashboard - KPIs will be continuously monitored to track progress, identify, and solve issues and adjust accordingly")
 st.sidebar.info("EDIH EU Data sync: 15.10.2025")
-st.sidebar.warning("AI RAG Engine by Syntagent - UNIRI spin-off")
+# st.sidebar.warning("AI RAG Engine by Syntagent - UNIRI spin-off")
 # st.sidebar.image(app_folder + "/Slike/SyntAgent-red.png", width=250)
